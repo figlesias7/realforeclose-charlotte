@@ -84,6 +84,7 @@ def parse_waiting_records(section_text: str) -> list[dict]:
     if not section_text:
         return []
 
+    parts = re.split(r"(?=Case\s*#:\s*)", section_text, flags=re.IGNORECASE)
     rows = []
 
     def grab(patterns, text: str, default: str = "") -> str:
@@ -95,49 +96,18 @@ def parse_waiting_records(section_text: str) -> list[dict]:
                 return clean_text(m.group(1))
         return default
 
-    # Capture every auction date marker in the waiting section, whether it lives
-    # inside a case block or in a separate header/group row.
-    date_markers = []
-    for m in re.finditer(r"Auction Starts\s*([0-9]{1,2}/[0-9]{1,2}/[0-9]{4}\s+[0-9:]+\s+[AP]M\s+ET)", section_text, re.IGNORECASE):
-        date_markers.append((m.start(), clean_text(m.group(1))))
+    for block in parts:
+        if "Case #:" not in block:
+            continue
 
-    # Some county pages may expose the date as a bare line/header without the
-    # words 'Auction Starts'. This gives us a fallback for grouped rows.
-    for m in re.finditer(r"(?<!\d)([0-9]{1,2}/[0-9]{1,2}/[0-9]{4}\s+[0-9:]+\s+[AP]M\s+ET)", section_text, re.IGNORECASE):
-        date_markers.append((m.start(), clean_text(m.group(1))))
-
-    date_markers.sort(key=lambda x: x[0])
-
-    case_matches = list(re.finditer(r"Case\s*#:\s*([A-Z0-9\-]+)", section_text, re.IGNORECASE))
-    if not case_matches:
-        return []
-
-    def latest_date_before(pos: int) -> str:
-        last = ""
-        for marker_pos, marker_date in date_markers:
-            if marker_pos < pos:
-                last = marker_date
-            else:
-                break
-        return last
-
-    for i, match in enumerate(case_matches):
-        start = match.start()
-        end = case_matches[i + 1].start() if i + 1 < len(case_matches) else len(section_text)
-        block = section_text[start:end]
-
-        case_no = clean_text(match.group(1))
+        case_no = grab(r"Case\s*#:\s*([A-Z0-9\-]+)", block)
         if not case_no:
             continue
 
-        # Prefer an explicit date inside the block. If absent, inherit the most
-        # recent date marker that appeared before this case block.
         auction_date = grab(
-            r"Auction Starts\s*([0-9]{1,2}/[0-9]{1,2}/[0-9]{4}\s+[0-9:]+\s+[AP]M\s+ET)",
+            r"Auction Starts\s*([0-9/]+\s+[0-9:]+\s+[AP]M\s+ET)",
             block,
         )
-        if not auction_date:
-            auction_date = latest_date_before(start)
 
         judgment = grab(
             [
@@ -190,7 +160,6 @@ def parse_waiting_records(section_text: str) -> list[dict]:
         })
 
     return rows
-
 
 def write_daily(rows: list[dict]) -> None:
     with open(TODAY_FILE, "w", newline="", encoding="utf-8") as f:
